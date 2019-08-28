@@ -28,10 +28,14 @@ namespace Goe2Tesla
         private bool previousState;
         private bool initialized = false;
 
+        private static ManualResetEvent ResetEvent { get; } = new ManualResetEvent(false);
+
         static void Main(string[] args)
         {
             Program p = new Program();
             p.Run();
+
+            Program.ResetEvent.WaitOne();
         }
 
         private async void Run()
