@@ -3,7 +3,9 @@ using MQTTnet.Client;
 using MQTTnet.Client.Options;
 using Newtonsoft.Json;
 using System;
+using System.IO;
 using System.Net.Http;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -11,6 +13,8 @@ namespace Goe2Tesla
 {
     class Program
     {
+        private string tokenFile = Environment.GetEnvironmentVariable("TOKEN_FILE");
+
         private string teslaEmail = Environment.GetEnvironmentVariable("TESLA_EMAIL");
         private string teslaPassword = Environment.GetEnvironmentVariable("TESLA_PASSWORD");
         private string teslaVehicleId = Environment.GetEnvironmentVariable("TESLA_VEHICLE_ID");
@@ -41,7 +45,7 @@ namespace Goe2Tesla
         private async void Run()
         {
             Console.WriteLine("Initializing");
-
+            
             var factory = new MqttFactory();
 
             using (var mqttClient = factory.CreateMqttClient())
@@ -52,8 +56,6 @@ namespace Goe2Tesla
                     .WithCredentials(mqttUsername, mqttPassword)
                     .WithCleanSession()
                     .Build();
-
-                await mqttClient.ConnectAsync(options, CancellationToken.None);
 
                 mqttClient.UseDisconnectedHandler(async e =>
                 {
@@ -77,14 +79,13 @@ namespace Goe2Tesla
 
                     bool currentState = this.ParseBool(json.alw.ToString());
 
-                    Console.WriteLine("Charging allowed? " + currentState);
-
                     if (this.initialized)
                     {
-                        if (currentState != previousState)
+                        if (currentState && currentState != previousState)
                         {
-                            Console.WriteLine("State changed, waking up car");
+                            Console.WriteLine("Charging enabled, waking up car...");
                             await this.WakeUp();
+                            Console.WriteLine("Woke up car");
                         }
                     }
                     else
@@ -103,6 +104,8 @@ namespace Goe2Tesla
 
                     Console.WriteLine("Subscribed to topic");
                 });
+
+                await mqttClient.ConnectAsync(options, CancellationToken.None);
             }
         }
 
@@ -113,19 +116,28 @@ namespace Goe2Tesla
 
         private async Task<dynamic> WakeUp()
         {
-            if(accessToken == null)
+            if (accessToken == null && File.Exists(tokenFile))
             {
-                Console.WriteLine("Logging into Tesla API");
-                await this.Login();
+                Console.WriteLine("Reading token from token file");
+                this.ParseToken(JsonConvert.DeserializeObject(await File.ReadAllTextAsync(tokenFile)));
             }
-            else if(DateTimeOffset.Now >= this.validUntil)
+
+            if (accessToken == null)
             {
-                Console.WriteLine("Refreshing Tesla token");
+                Console.WriteLine("Logging into Tesla API...");
+                await this.Login();
+                Console.WriteLine("Logged into API");
+            }
+            else if (DateTimeOffset.Now >= this.validUntil)
+            {
+                Console.WriteLine("Refreshing Tesla token...");
                 await this.Refresh();
+                Console.WriteLine("Refreshed token");
             }
 
             using (HttpClient client = new HttpClient())
             {
+                client.DefaultRequestHeaders.Add("User-Agent", "Goe2Tesla/1.0");
                 client.DefaultRequestHeaders.Add("Authorization", "Bearer " + this.accessToken);
 
                 using (HttpResponseMessage response = await client.PostAsync(string.Format("https://owner-api.teslamotors.com/api/1/vehicles/{0}/wake_up", this.teslaVehicleId), new StringContent("")))
@@ -139,6 +151,8 @@ namespace Goe2Tesla
         {
             using (HttpClient client = new HttpClient())
             {
+                client.DefaultRequestHeaders.Add("User-Agent", "Goe2Tesla/1.0");
+
                 dynamic request = new
                 {
                     grant_type = "password",
@@ -148,9 +162,12 @@ namespace Goe2Tesla
                     password = this.teslaPassword
                 };
 
-                using (HttpResponseMessage response = await client.PostAsync("https://owner-api.teslamotors.com/oauth/token?grant_type=password", new StringContent(JsonConvert.SerializeObject(request))))
+                using (HttpResponseMessage response = await client.PostAsync("https://owner-api.teslamotors.com/oauth/token?grant_type=password", new StringContent(JsonConvert.SerializeObject(request), Encoding.UTF8, "application/json")))
                 {
-                    this.ParseTokenResponse(JsonConvert.DeserializeObject(await response.Content.ReadAsStringAsync()));
+                    string json = await response.Content.ReadAsStringAsync();
+                    await File.WriteAllTextAsync(tokenFile, json);
+
+                    this.ParseToken(JsonConvert.DeserializeObject(json));
                 }
             }
         }
@@ -159,6 +176,8 @@ namespace Goe2Tesla
         {
             using (HttpClient client = new HttpClient())
             {
+                client.DefaultRequestHeaders.Add("User-Agent", "Goe2Tesla/1.0");
+
                 dynamic request = new
                 {
                     grant_type = "refresh_token",
@@ -167,20 +186,25 @@ namespace Goe2Tesla
                     refresh_token = this.refreshToken
                 };
 
-                using (HttpResponseMessage response = await client.PostAsync("https://owner-api.teslamotors.com/oauth/token?grant_type=refresh_token", new StringContent(JsonConvert.SerializeObject(request))))
+                using (HttpResponseMessage response = await client.PostAsync("https://owner-api.teslamotors.com/oauth/token?grant_type=refresh_token", new StringContent(JsonConvert.SerializeObject(request), Encoding.UTF8, "application/json")))
                 {
-                    this.ParseTokenResponse(JsonConvert.DeserializeObject(await response.Content.ReadAsStringAsync()));
+                    string json = await response.Content.ReadAsStringAsync();
+                    await File.WriteAllTextAsync(tokenFile, json);
+
+                    this.ParseToken(JsonConvert.DeserializeObject(json));
                 }
             }
         }
 
-        private void ParseTokenResponse(dynamic json)
+        private void ParseToken(dynamic json)
         {
-            this.accessToken = json.access_token;
-            this.refreshToken = json.refresh_token;
-            this.validUntil = DateTimeOffset.FromUnixTimeSeconds(long.Parse(json.created_at.ToString()));
+            this.accessToken = json.access_token.ToString();
+            this.refreshToken = json.refresh_token.ToString();
 
-            this.validUntil.AddSeconds(json.expires_in);
+            this.validUntil = DateTimeOffset
+                .FromUnixTimeSeconds(long.Parse(json.created_at.ToString()))
+                .AddSeconds(double.Parse(json.expires_in.ToString()))
+                .AddHours(-1);
         }
     }
 }
