@@ -150,9 +150,13 @@ namespace Goe2Tesla
 
             try
             {
+                Console.WriteLine("Handling token");
                 await this.HandleToken();
 
+                Console.WriteLine("Getting vehicle id");
                 string vehicleId = await this.GetVehicleId();
+
+                Console.WriteLine("Waking up");
                 await this.WakeUp(vehicleId);
             }
             catch (TeslaApiException ex)
