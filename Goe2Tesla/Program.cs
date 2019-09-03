@@ -14,17 +14,21 @@ namespace Goe2Tesla
 {
     class Program
     {
-        private string tokenFile = Environment.GetEnvironmentVariable("TOKEN_FILE");
+        private readonly string userAgent = "Goe2Tesla/1.1";
+        private readonly string clientId = "81527cff06843c8634fdc09e8ac0abefb46ac849f38fe1e431c2ef2106796384";
+        private readonly string clientSecret = "c7257eb71a564034f9419ee651c7d0e5f7aa6bfbd18bafb5c5c033b093bb2fa3";
 
-        private string teslaEmail = Environment.GetEnvironmentVariable("TESLA_EMAIL");
-        private string teslaPassword = Environment.GetEnvironmentVariable("TESLA_PASSWORD");
-        private string teslaVehicleId = Environment.GetEnvironmentVariable("TESLA_VEHICLE_ID");
+        private readonly string tokenFile = Environment.GetEnvironmentVariable("TOKEN_FILE");
 
-        private string mqttServer = Environment.GetEnvironmentVariable("MQTT_SERVER");
-        private int mqttPort = int.Parse(Environment.GetEnvironmentVariable("MQTT_PORT"));
-        private string mqttUsername = Environment.GetEnvironmentVariable("MQTT_USERNAME");
-        private string mqttPassword = Environment.GetEnvironmentVariable("MQTT_PASSWORD");
-        private string mqttTopic = Environment.GetEnvironmentVariable("MQTT_TOPIC");
+        private readonly string teslaEmail = Environment.GetEnvironmentVariable("TESLA_EMAIL");
+        private readonly string teslaPassword = Environment.GetEnvironmentVariable("TESLA_PASSWORD");
+        private readonly string teslaVehicleVin = Environment.GetEnvironmentVariable("TESLA_VEHICLE_VIN");
+
+        private readonly string mqttServer = Environment.GetEnvironmentVariable("MQTT_SERVER");
+        private readonly int mqttPort = int.Parse(Environment.GetEnvironmentVariable("MQTT_PORT"));
+        private readonly string mqttUsername = Environment.GetEnvironmentVariable("MQTT_USERNAME");
+        private readonly string mqttPassword = Environment.GetEnvironmentVariable("MQTT_PASSWORD");
+        private readonly string mqttTopic = Environment.GetEnvironmentVariable("MQTT_TOPIC");
 
         private string accessToken = null;
         private string refreshToken = null;
@@ -46,7 +50,7 @@ namespace Goe2Tesla
         private async void Run()
         {
             Console.WriteLine("Initializing");
-            
+
             var factory = new MqttFactory();
 
             using (var mqttClient = factory.CreateMqttClient())
@@ -89,7 +93,10 @@ namespace Goe2Tesla
 
                             try
                             {
-                                await this.WakeUp();
+                                await this.HandleToken();
+
+                                string vehicleId = await this.GetVehicleId();
+                                await this.WakeUp(vehicleId);
                             }
                             catch (TeslaApiException ex)
                             {
@@ -128,6 +135,8 @@ namespace Goe2Tesla
                 });
 
                 await mqttClient.ConnectAsync(options, CancellationToken.None);
+
+                await this.HandleToken();
             }
         }
 
@@ -136,7 +145,7 @@ namespace Goe2Tesla
             return (input == "1");
         }
 
-        private async Task WakeUp()
+        private async Task HandleToken()
         {
             if (accessToken == null && File.Exists(tokenFile))
             {
@@ -160,13 +169,42 @@ namespace Goe2Tesla
 
                 Console.WriteLine("Refreshed token");
             }
+        }
 
+        private async Task<string> GetVehicleId()
+        {
             using (HttpClient client = new HttpClient())
             {
-                client.DefaultRequestHeaders.Add("User-Agent", "Goe2Tesla/1.0");
+                client.DefaultRequestHeaders.Add("User-Agent", userAgent);
+
+                using (HttpResponseMessage response = await client.GetAsync("https://owner-api.teslamotors.com/api/1/vehicles"))
+                {
+                    string responseString = await response.Content.ReadAsStringAsync();
+
+                    if (response.StatusCode != HttpStatusCode.OK)
+                        throw new TeslaApiException("Get vehicle list failed", response.StatusCode, responseString);
+
+                    dynamic json = JsonConvert.DeserializeObject(responseString);
+
+                    foreach(dynamic vehicleJson in json.response)
+                    {
+                        if (vehicleJson.vin.ToString() == this.teslaVehicleVin)
+                            return vehicleJson.id.ToString();
+                    }
+
+                    return null;
+                }
+            }
+        }
+
+        private async Task WakeUp(string vehicleId)
+        {
+            using (HttpClient client = new HttpClient())
+            {
+                client.DefaultRequestHeaders.Add("User-Agent", userAgent);
                 client.DefaultRequestHeaders.Add("Authorization", "Bearer " + this.accessToken);
 
-                using (HttpResponseMessage response = await client.PostAsync(string.Format("https://owner-api.teslamotors.com/api/1/vehicles/{0}/wake_up", this.teslaVehicleId), new StringContent("")))
+                using (HttpResponseMessage response = await client.PostAsync(string.Format("https://owner-api.teslamotors.com/api/1/vehicles/{0}/wake_up", vehicleId), new StringContent("")))
                 {
                     string json = await response.Content.ReadAsStringAsync();
 
@@ -180,13 +218,13 @@ namespace Goe2Tesla
         {
             using (HttpClient client = new HttpClient())
             {
-                client.DefaultRequestHeaders.Add("User-Agent", "Goe2Tesla/1.0");
+                client.DefaultRequestHeaders.Add("User-Agent", userAgent);
 
                 dynamic request = new
                 {
                     grant_type = "password",
-                    client_id = "81527cff06843c8634fdc09e8ac0abefb46ac849f38fe1e431c2ef2106796384",
-                    client_secret = "c7257eb71a564034f9419ee651c7d0e5f7aa6bfbd18bafb5c5c033b093bb2fa3",
+                    client_id = clientId,
+                    client_secret = clientSecret,
                     email = this.teslaEmail,
                     password = this.teslaPassword
                 };
@@ -209,13 +247,13 @@ namespace Goe2Tesla
         {
             using (HttpClient client = new HttpClient())
             {
-                client.DefaultRequestHeaders.Add("User-Agent", "Goe2Tesla/1.0");
+                client.DefaultRequestHeaders.Add("User-Agent", userAgent);
 
                 dynamic request = new
                 {
                     grant_type = "refresh_token",
-                    client_id = "81527cff06843c8634fdc09e8ac0abefb46ac849f38fe1e431c2ef2106796384",
-                    client_secret = "c7257eb71a564034f9419ee651c7d0e5f7aa6bfbd18bafb5c5c033b093bb2fa3",
+                    client_id = clientId,
+                    client_secret = clientSecret,
                     refresh_token = this.refreshToken
                 };
 
