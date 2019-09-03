@@ -4,6 +4,7 @@ using MQTTnet.Client.Options;
 using Newtonsoft.Json;
 using System;
 using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
@@ -85,7 +86,28 @@ namespace Goe2Tesla
                         {
                             Console.WriteLine("Charging enabled, waking up car...");
                             this.previousState = currentState;
-                            await this.WakeUp();
+
+                            try
+                            {
+                                await this.WakeUp();
+                            }
+                            catch (TeslaApiException ex)
+                            {
+                                Console.WriteLine("-------------------------");
+                                Console.WriteLine(ex.Message);
+                                Console.WriteLine(ex.Status);
+                                Console.WriteLine("-------------------------");
+                                Console.WriteLine(ex.Response);
+                                Console.WriteLine("-------------------------");
+
+                                Console.WriteLine("Clearing token and restarting in 10 seconds");
+
+                                await Task.Delay(TimeSpan.FromSeconds(10));
+
+                                this.ClearToken();
+                                Program.ResetEvent.Set();
+                            }
+
                             Console.WriteLine("Woke up car");
                         }
                     }
@@ -114,7 +136,7 @@ namespace Goe2Tesla
             return (input == "1");
         }
 
-        private async Task<dynamic> WakeUp()
+        private async Task WakeUp()
         {
             if (accessToken == null && File.Exists(tokenFile))
             {
@@ -125,13 +147,17 @@ namespace Goe2Tesla
             if (accessToken == null)
             {
                 Console.WriteLine("Logging into Tesla API...");
+
                 await this.Login();
+
                 Console.WriteLine("Logged into API");
             }
             else if (DateTimeOffset.Now >= this.validUntil)
             {
                 Console.WriteLine("Refreshing Tesla token...");
+
                 await this.Refresh();
+
                 Console.WriteLine("Refreshed token");
             }
 
@@ -143,9 +169,9 @@ namespace Goe2Tesla
                 using (HttpResponseMessage response = await client.PostAsync(string.Format("https://owner-api.teslamotors.com/api/1/vehicles/{0}/wake_up", this.teslaVehicleId), new StringContent("")))
                 {
                     string json = await response.Content.ReadAsStringAsync();
-                    Console.WriteLine(json);
-                    
-                    return JsonConvert.DeserializeObject(json);
+
+                    if (response.StatusCode != HttpStatusCode.OK)
+                        throw new TeslaApiException("Wake up failed", response.StatusCode, json);
                 }
             }
         }
@@ -168,6 +194,10 @@ namespace Goe2Tesla
                 using (HttpResponseMessage response = await client.PostAsync("https://owner-api.teslamotors.com/oauth/token?grant_type=password", new StringContent(JsonConvert.SerializeObject(request), Encoding.UTF8, "application/json")))
                 {
                     string json = await response.Content.ReadAsStringAsync();
+
+                    if (response.StatusCode != HttpStatusCode.OK)
+                        throw new TeslaApiException("Login failed", response.StatusCode, json);
+
                     await File.WriteAllTextAsync(tokenFile, json);
 
                     this.ParseToken(JsonConvert.DeserializeObject(json));
@@ -192,6 +222,10 @@ namespace Goe2Tesla
                 using (HttpResponseMessage response = await client.PostAsync("https://owner-api.teslamotors.com/oauth/token?grant_type=refresh_token", new StringContent(JsonConvert.SerializeObject(request), Encoding.UTF8, "application/json")))
                 {
                     string json = await response.Content.ReadAsStringAsync();
+
+                    if (response.StatusCode != HttpStatusCode.OK)
+                        throw new TeslaApiException("Token refresh failed", response.StatusCode, json);
+
                     await File.WriteAllTextAsync(tokenFile, json);
 
                     this.ParseToken(JsonConvert.DeserializeObject(json));
@@ -208,6 +242,16 @@ namespace Goe2Tesla
                 .FromUnixTimeSeconds(long.Parse(json.created_at.ToString()))
                 .AddSeconds(double.Parse(json.expires_in.ToString()))
                 .AddHours(-1);
+        }
+
+        private void ClearToken()
+        {
+            this.accessToken = null;
+            this.refreshToken = null;
+
+            this.validUntil = DateTimeOffset.Now;
+
+            File.Delete(tokenFile);
         }
     }
 }
