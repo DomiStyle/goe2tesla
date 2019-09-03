@@ -84,6 +84,7 @@ namespace Goe2Tesla
                         if (currentState && currentState != previousState)
                         {
                             Console.WriteLine("Charging enabled, waking up car...");
+                            this.previousState = currentState;
                             await this.WakeUp();
                             Console.WriteLine("Woke up car");
                         }
@@ -91,9 +92,8 @@ namespace Goe2Tesla
                     else
                     {
                         this.initialized = true;
+                        this.previousState = currentState;
                     }
-
-                    this.previousState = currentState;
                 });
 
                 mqttClient.UseConnectedHandler(async e =>
@@ -142,7 +142,10 @@ namespace Goe2Tesla
 
                 using (HttpResponseMessage response = await client.PostAsync(string.Format("https://owner-api.teslamotors.com/api/1/vehicles/{0}/wake_up", this.teslaVehicleId), new StringContent("")))
                 {
-                    return JsonConvert.DeserializeObject(await response.Content.ReadAsStringAsync());
+                    string json = await response.Content.ReadAsStringAsync();
+                    Console.WriteLine(json);
+                    
+                    return JsonConvert.DeserializeObject(json);
                 }
             }
         }
