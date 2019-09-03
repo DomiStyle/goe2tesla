@@ -140,8 +140,14 @@ namespace Goe2Tesla
             return (input == "1");
         }
 
-        private async Task HandleWakeUp()
+        private async Task HandleWakeUp(ushort retries = 0)
         {
+            if(retries > 3)
+            {
+                Console.WriteLine("Retries exceeded, waiting for user interaction");
+                Program.ResetEvent.WaitOne();
+            }
+
             try
             {
                 await this.HandleToken();
@@ -163,7 +169,8 @@ namespace Goe2Tesla
                 await Task.Delay(TimeSpan.FromSeconds(15));
 
                 this.ClearToken();
-                await this.HandleWakeUp();
+                retries++;
+                await this.HandleWakeUp(retries);
             }
         }
 
@@ -198,6 +205,7 @@ namespace Goe2Tesla
             using (HttpClient client = new HttpClient())
             {
                 client.DefaultRequestHeaders.Add("User-Agent", userAgent);
+                client.DefaultRequestHeaders.Add("Authorization", "Bearer " + this.accessToken);
 
                 using (HttpResponseMessage response = await client.GetAsync("https://owner-api.teslamotors.com/api/1/vehicles"))
                 {
