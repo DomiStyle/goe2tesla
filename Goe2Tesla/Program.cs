@@ -1,6 +1,7 @@
 ﻿using MQTTnet;
 using MQTTnet.Client;
 using MQTTnet.Client.Options;
+using MQTTnet.Diagnostics;
 using Newtonsoft.Json;
 using System;
 using System.IO;
@@ -36,6 +37,7 @@ namespace Goe2Tesla
 
         private bool previousState;
         private bool initialized = false;
+        private bool working = false;
 
         private static ManualResetEvent ResetEvent { get; } = new ManualResetEvent(false);
 
@@ -56,11 +58,18 @@ namespace Goe2Tesla
             using (var mqttClient = factory.CreateMqttClient())
             {
                 var options = new MqttClientOptionsBuilder()
-                    .WithClientId("Goe2Tesla")
                     .WithTcpServer(mqttServer, mqttPort)
+                    .WithClientId("Goe2Tesla")
                     .WithCredentials(mqttUsername, mqttPassword)
                     .WithCleanSession()
                     .Build();
+
+                /*
+                MqttNetGlobalLogger.LogMessagePublished += (sender, e) =>
+                {
+                    Console.WriteLine(e.TraceMessage.Message);
+                };
+                */
 
                 mqttClient.UseDisconnectedHandler(async e =>
                 {
@@ -80,6 +89,12 @@ namespace Goe2Tesla
 
                 mqttClient.UseApplicationMessageReceivedHandler(async e =>
                 {
+                    if (this.working)
+                    {
+                        Console.WriteLine("Handler is busy, ignoring message");
+                        return;
+                    }
+
                     dynamic json = JsonConvert.DeserializeObject(e.ApplicationMessage.ConvertPayloadToString());
 
                     bool currentState = this.ParseBool(json.alw.ToString());
@@ -89,7 +104,7 @@ namespace Goe2Tesla
                         if (currentState && currentState != previousState)
                         {
                             Console.WriteLine("Charging enabled, waking up car...");
-                            this.previousState = currentState;
+                            this.working = true;
 
                             try
                             {
@@ -116,13 +131,16 @@ namespace Goe2Tesla
                             }
 
                             Console.WriteLine("Woke up car");
+
+                            this.working = false;
                         }
                     }
                     else
                     {
                         this.initialized = true;
-                        this.previousState = currentState;
                     }
+
+                    this.previousState = currentState;
                 });
 
                 mqttClient.UseConnectedHandler(async e =>
