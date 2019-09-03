@@ -106,33 +106,10 @@ namespace Goe2Tesla
                             Console.WriteLine("Charging enabled, waking up car...");
                             this.working = true;
 
-                            try
-                            {
-                                await this.HandleToken();
-
-                                string vehicleId = await this.GetVehicleId();
-                                await this.WakeUp(vehicleId);
-                            }
-                            catch (TeslaApiException ex)
-                            {
-                                Console.WriteLine("-------------------------");
-                                Console.WriteLine(ex.Message);
-                                Console.WriteLine(ex.Status);
-                                Console.WriteLine("-------------------------");
-                                Console.WriteLine(ex.Response);
-                                Console.WriteLine("-------------------------");
-
-                                Console.WriteLine("Clearing token and restarting in 10 seconds");
-
-                                await Task.Delay(TimeSpan.FromSeconds(10));
-
-                                this.ClearToken();
-                                Program.ResetEvent.Set();
-                            }
-
-                            Console.WriteLine("Woke up car");
+                            await this.HandleWakeUp();
 
                             this.working = false;
+                            Console.WriteLine("Woke up car");
                         }
                     }
                     else
@@ -163,15 +140,42 @@ namespace Goe2Tesla
             return (input == "1");
         }
 
+        private async Task HandleWakeUp()
+        {
+            try
+            {
+                await this.HandleToken();
+
+                string vehicleId = await this.GetVehicleId();
+                await this.WakeUp(vehicleId);
+            }
+            catch (TeslaApiException ex)
+            {
+                Console.WriteLine("-------------------------");
+                Console.WriteLine(ex.Message);
+                Console.WriteLine(ex.Status);
+                Console.WriteLine("-------------------------");
+                Console.WriteLine(ex.Response);
+                Console.WriteLine("-------------------------");
+
+                Console.WriteLine("Clearing token and retrying in 15 seconds");
+
+                await Task.Delay(TimeSpan.FromSeconds(15));
+
+                this.ClearToken();
+                await this.HandleWakeUp();
+            }
+        }
+
         private async Task HandleToken()
         {
-            if (accessToken == null && File.Exists(tokenFile))
+            if (this.accessToken == null && File.Exists(tokenFile))
             {
                 Console.WriteLine("Reading token from token file");
                 this.ParseToken(JsonConvert.DeserializeObject(await File.ReadAllTextAsync(tokenFile)));
             }
 
-            if (accessToken == null)
+            if (this.accessToken == null)
             {
                 Console.WriteLine("Logging into Tesla API...");
 
