@@ -10,6 +10,8 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Linq;
+using System.Collections.Generic;
 
 namespace Goe2Tesla
 {
@@ -156,8 +158,26 @@ namespace Goe2Tesla
                 Console.WriteLine("Getting vehicle id");
                 string vehicleId = await this.GetVehicleId();
 
-                Console.WriteLine("Waking up");
-                await this.WakeUp(vehicleId);
+                while (true)
+                {
+                    Console.WriteLine("Waking up...");
+                    await this.WakeUp(vehicleId);
+
+                    Console.WriteLine("Waiting for vehicle to come online...");
+                    await Task.Delay(60000);
+
+                    string status = await this.GetVehicleStatus();
+
+                    if(status == "online")
+                    {
+                        Console.WriteLine("Vehicle is online");
+                        break;
+                    }
+                    else
+                    {
+                        Console.WriteLine("Expected vehicle to be online but got " + status + ", retrying...");
+                    }
+                }
             }
             catch (TeslaApiException ex)
             {
@@ -204,7 +224,33 @@ namespace Goe2Tesla
             }
         }
 
+        private async Task<string> GetVehicleStatus()
+        {
+            dynamic json = JsonConvert.DeserializeObject(await this.GetVehicleList());
+
+            foreach (dynamic vehicleJson in json.response)
+            {
+                if (vehicleJson.vin.ToString() == this.teslaVehicleVin)
+                    return vehicleJson.state.ToString();
+            }
+
+            return null;
+        }
+
         private async Task<string> GetVehicleId()
+        {
+            dynamic json = JsonConvert.DeserializeObject(await this.GetVehicleList());
+
+            foreach (dynamic vehicleJson in json.response)
+            {
+                if (vehicleJson.vin.ToString() == this.teslaVehicleVin)
+                    return vehicleJson.id.ToString();
+            }
+
+            return null;
+        }
+
+        private async Task<string> GetVehicleList()
         {
             using (HttpClient client = new HttpClient())
             {
@@ -218,15 +264,7 @@ namespace Goe2Tesla
                     if (response.StatusCode != HttpStatusCode.OK)
                         throw new TeslaApiException("Get vehicle list failed", response.StatusCode, responseString);
 
-                    dynamic json = JsonConvert.DeserializeObject(responseString);
-
-                    foreach(dynamic vehicleJson in json.response)
-                    {
-                        if (vehicleJson.vin.ToString() == this.teslaVehicleVin)
-                            return vehicleJson.id.ToString();
-                    }
-
-                    return null;
+                    return responseString;
                 }
             }
         }
