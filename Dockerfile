@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/core/runtime:2.1
+FROM mcr.microsoft.com/dotnet/core/runtime:3.1
 
 ENV MQTT_PORT=1883 \
     TOKEN_FILE=/app/token.json

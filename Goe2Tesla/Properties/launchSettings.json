@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "Goe2Tesla": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "MQTT_PORT": "1883",
+        "MQTT_TOPIC": "test12491242",
+        "MQTT_SERVER": "5.196.95.208"
+      }
+    }
+  }
+}
