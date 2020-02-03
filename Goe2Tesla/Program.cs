@@ -54,7 +54,7 @@ namespace Goe2Tesla
             Console.WriteLine("Initializing");
 
             var mqttClient = await MqttClient.CreateAsync(mqttServer, mqttPort);
-            await mqttClient.ConnectAsync(new MqttClientCredentials("Goe2Tesla", mqttUsername, mqttPassword), cleanSession: true);
+            await mqttClient.ConnectAsync(new MqttClientCredentials("Goe2Tesla " + Dns.GetHostName(), mqttUsername, mqttPassword), cleanSession: true);
 
             mqttClient.MessageStream.Where(message => message.Topic == mqttTopic).Subscribe(async message =>
             {
