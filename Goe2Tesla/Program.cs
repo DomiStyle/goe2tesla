@@ -53,7 +53,7 @@ namespace Goe2Tesla
         {
             Console.WriteLine("Initializing");
 
-            string clientName = "Goe2Tesla " + Dns.GetHostName().Where(c => Char.IsLetterOrDigit(c)).ToString();
+            string clientName = "G2T" + DateTime.Now.ToString("yyyyMMddHHmmss");
 
             var mqttClient = await MqttClient.CreateAsync(mqttServer, mqttPort);
             await mqttClient.ConnectAsync(new MqttClientCredentials(clientName, mqttUsername, mqttPassword), cleanSession: true);
