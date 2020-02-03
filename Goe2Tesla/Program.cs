@@ -1,8 +1,4 @@
-﻿using MQTTnet;
-using MQTTnet.Client;
-using MQTTnet.Client.Options;
-using MQTTnet.Diagnostics;
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
 using System;
 using System.IO;
 using System.Net;
@@ -12,12 +8,14 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Linq;
 using System.Collections.Generic;
+using System.Net.Mqtt;
+using System.Reactive.Linq;
 
 namespace Goe2Tesla
 {
     class Program
     {
-        private readonly string userAgent = "Goe2Tesla/1.1";
+        private readonly string userAgent = "Goe2Tesla/1.2";
         private readonly string clientId = "81527cff06843c8634fdc09e8ac0abefb46ac849f38fe1e431c2ef2106796384";
         private readonly string clientSecret = "c7257eb71a564034f9419ee651c7d0e5f7aa6bfbd18bafb5c5c033b093bb2fa3";
 
@@ -55,86 +53,54 @@ namespace Goe2Tesla
         {
             Console.WriteLine("Initializing");
 
-            var factory = new MqttFactory();
+            var mqttClient = await MqttClient.CreateAsync(mqttServer, mqttPort);
+            await mqttClient.ConnectAsync(new MqttClientCredentials("Goe2Tesla", mqttUsername, mqttPassword), cleanSession: true);
 
-            using (var mqttClient = factory.CreateMqttClient())
+            mqttClient.MessageStream.Where(message => message.Topic == mqttTopic).Subscribe(async message =>
             {
-                var options = new MqttClientOptionsBuilder()
-                    .WithTcpServer(mqttServer, mqttPort)
-                    .WithClientId("Goe2Tesla")
-                    .WithCredentials(mqttUsername, mqttPassword)
-                    .WithCleanSession()
-                    .Build();
-
-                /*
-                MqttNetGlobalLogger.LogMessagePublished += (sender, e) =>
+                if (this.working)
                 {
-                    Console.WriteLine(e.TraceMessage.Message);
-                };
-                */
+                    return;
+                }
 
-                mqttClient.UseDisconnectedHandler(async e =>
+                dynamic json = JsonConvert.DeserializeObject(Encoding.UTF8.GetString(message.Payload));
+
+                bool currentState = this.ParseBool(json.alw.ToString());
+
+                if (this.initialized)
                 {
-                    Console.WriteLine("MQTT connection lost");
-
-                    await Task.Delay(TimeSpan.FromSeconds(10));
-
-                    try
+                    if (currentState && currentState != previousState)
                     {
-                        await mqttClient.ConnectAsync(options, CancellationToken.None);
-                    }
-                    catch
-                    {
-                        Console.WriteLine("Reconnecting to MQTT server failed");
-                    }
-                });
+                        Console.WriteLine("Charging enabled, waking up car...");
+                        this.working = true;
 
-                mqttClient.UseApplicationMessageReceivedHandler(async e =>
+                        await this.HandleWakeUp();
+
+                        this.working = false;
+                        Console.WriteLine("Woke up car");
+                    }
+                }
+                else
                 {
-                    if (this.working)
-                    {
-                        Console.WriteLine("Handler is busy, ignoring message");
-                        return;
-                    }
+                    this.initialized = true;
+                }
 
-                    dynamic json = JsonConvert.DeserializeObject(e.ApplicationMessage.ConvertPayloadToString());
+                this.previousState = currentState;
+            });
 
-                    bool currentState = this.ParseBool(json.alw.ToString());
+            Console.WriteLine("Connected to server");
 
-                    if (this.initialized)
-                    {
-                        if (currentState && currentState != previousState)
-                        {
-                            Console.WriteLine("Charging enabled, waking up car...");
-                            this.working = true;
+            await mqttClient.SubscribeAsync(mqttTopic, MqttQualityOfService.ExactlyOnce);
 
-                            await this.HandleWakeUp();
+            Console.WriteLine("Subscribed to topic");
 
-                            this.working = false;
-                            Console.WriteLine("Woke up car");
-                        }
-                    }
-                    else
-                    {
-                        this.initialized = true;
-                    }
+            mqttClient.Disconnected += (object sender, MqttEndpointDisconnected e) =>
+            {
+                Console.WriteLine("MQTT connection lost");
+                Program.ResetEvent.Set();
+            };
 
-                    this.previousState = currentState;
-                });
-
-                mqttClient.UseConnectedHandler(async e =>
-                {
-                    Console.WriteLine("Connected to server");
-
-                    await mqttClient.SubscribeAsync(mqttTopic);
-
-                    Console.WriteLine("Subscribed to topic");
-                });
-
-                await mqttClient.ConnectAsync(options, CancellationToken.None);
-
-                await this.HandleToken();
-            }
+            await this.HandleToken();
         }
 
         private bool ParseBool(string input)
