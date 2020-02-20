@@ -10,12 +10,15 @@ using System.Linq;
 using System.Collections.Generic;
 using System.Net.Mqtt;
 using System.Reactive.Linq;
+using Telegram.Bot;
+using System.Globalization;
 
 namespace Goe2Tesla
 {
     class Program
     {
-        private readonly string userAgent = "Goe2Tesla/1.2";
+        private readonly string userAgent = "Goe2Tesla/1.3";
+        private readonly string clientName = "G2T" + DateTime.Now.ToString("yyyyMMddHHmmss");
         private readonly string clientId = "81527cff06843c8634fdc09e8ac0abefb46ac849f38fe1e431c2ef2106796384";
         private readonly string clientSecret = "c7257eb71a564034f9419ee651c7d0e5f7aa6bfbd18bafb5c5c033b093bb2fa3";
 
@@ -31,6 +34,15 @@ namespace Goe2Tesla
         private readonly string mqttPassword = Environment.GetEnvironmentVariable("MQTT_PASSWORD");
         private readonly string mqttTopic = Environment.GetEnvironmentVariable("MQTT_TOPIC");
 
+        private readonly int WakeupRetries = int.Parse(Environment.GetEnvironmentVariable("WAKEUP_RETRIES"));
+
+        private readonly bool PreWakeup = bool.Parse(Environment.GetEnvironmentVariable("PRE_WAKEUP_ENABLE"));
+        private readonly TimeSpan PreWakeupTime = TimeSpan.ParseExact(Environment.GetEnvironmentVariable("PRE_WAKEUP_TIME"), @"hh\:mm", CultureInfo.InvariantCulture);
+
+        private readonly bool Notify = bool.Parse(Environment.GetEnvironmentVariable("NOTIFY_ENABLE"));
+        private readonly string TelegramToken = Environment.GetEnvironmentVariable("NOTIFY_TELEGRAM_TOKEN");
+        private readonly int TelegramChat = int.Parse(Environment.GetEnvironmentVariable("NOTIFY_TELEGRAM_CHAT"));
+
         private string accessToken = null;
         private string refreshToken = null;
         private DateTimeOffset validUntil;
@@ -38,6 +50,10 @@ namespace Goe2Tesla
         private bool previousState;
         private bool initialized = false;
         private bool working = false;
+
+        private IMqttClient Client { get; set; }
+        private TelegramBotClient TelegramClient { get; set; }
+        private Timer PreWakeupTimer { get; set; }
 
         private static ManualResetEvent ResetEvent { get; } = new ManualResetEvent(false);
 
@@ -49,16 +65,25 @@ namespace Goe2Tesla
             Program.ResetEvent.WaitOne();
         }
 
+        private async void Log(string message)
+        {
+            if (this.Notify)
+                await this.TelegramClient.SendTextMessageAsync(this.TelegramChat, string.Format("[{0}] {1}", this.clientName, message));
+        }
+
         private async void Run()
         {
             Console.WriteLine("Initializing");
 
-            string clientName = "G2T" + DateTime.Now.ToString("yyyyMMddHHmmss");
+            if (this.Notify)
+            {
+                this.TelegramClient = new TelegramBotClient(this.TelegramToken);
+            }
 
-            var mqttClient = await MqttClient.CreateAsync(mqttServer, mqttPort);
-            await mqttClient.ConnectAsync(new MqttClientCredentials(clientName, mqttUsername, mqttPassword), cleanSession: true);
+            this.Client = await MqttClient.CreateAsync(mqttServer, mqttPort);
+            await this.Client.ConnectAsync(new MqttClientCredentials(clientName, mqttUsername, mqttPassword), cleanSession: true);
 
-            mqttClient.MessageStream.Where(message => message.Topic == mqttTopic).Subscribe(async message =>
+            this.Client.MessageStream.Where(message => message.Topic == mqttTopic).Subscribe(async message =>
             {
                 if (this.working)
                 {
@@ -92,17 +117,51 @@ namespace Goe2Tesla
 
             Console.WriteLine("Connected to server");
 
-            await mqttClient.SubscribeAsync(mqttTopic, MqttQualityOfService.ExactlyOnce);
+            await this.Client.SubscribeAsync(mqttTopic, MqttQualityOfService.ExactlyOnce);
 
             Console.WriteLine("Subscribed to topic");
 
-            mqttClient.Disconnected += (object sender, MqttEndpointDisconnected e) =>
+            //this.Log("Connected to MQTT");
+
+            this.Client.Disconnected += (object sender, MqttEndpointDisconnected e) =>
             {
                 Console.WriteLine("MQTT connection lost");
+                //this.Log("Disconnected from MQTT");
                 Program.ResetEvent.Set();
             };
 
             await this.HandleToken();
+
+            if(this.PreWakeup)
+            {
+                DateTime now = DateTime.Now;
+
+                DateTime target = DateTime.Today.AddHours(this.PreWakeupTime.Hours).AddMinutes(this.PreWakeupTime.Minutes);
+
+                TimeSpan timeToWait = target - now;
+
+                if (timeToWait < TimeSpan.Zero)
+                {
+                    target = target.AddDays(1);
+                    timeToWait = target - now;
+                }
+
+                this.PreWakeupTimer = new Timer(this.RunPreWakeup, null, timeToWait, TimeSpan.FromHours(24));
+                Console.WriteLine("Schedule pre-wakeup in " + timeToWait);
+            }
+        }
+
+        private async void RunPreWakeup(object state)
+        {
+            Console.WriteLine("Running pre-wakeup");
+            this.Log("Running pre-wakeup");
+
+            if(!this.Client.IsConnected)
+            {
+                this.Log("Warning: MQTT is not connected, car will not wake up!");
+            }
+
+            await this.HandleWakeUp();
         }
 
         private bool ParseBool(string input)
@@ -114,8 +173,9 @@ namespace Goe2Tesla
         {
             if(retries > 3)
             {
-                Console.WriteLine("Retries exceeded, waiting for user interaction");
-                Program.ResetEvent.WaitOne();
+                Console.WriteLine("Retries exceeded, wakeup failed!");
+                this.Log("Retries exceeded, wakeup failed!");
+                Program.ResetEvent.Set();
             }
 
             try
@@ -126,7 +186,7 @@ namespace Goe2Tesla
                 Console.WriteLine("Getting vehicle id");
                 string vehicleId = await this.GetVehicleId();
 
-                while (true)
+                for(int i = 1; i <= this.WakeupRetries; i++)
                 {
                     Console.WriteLine("Waking up...");
                     await this.WakeUp(vehicleId);
@@ -144,6 +204,7 @@ namespace Goe2Tesla
                     else
                     {
                         Console.WriteLine("Expected vehicle to be online but got " + status + ", retrying...");
+                        this.Log("Could not wake up vehicle (attempt #" + i + ")");
                     }
                 }
             }
@@ -281,6 +342,8 @@ namespace Goe2Tesla
                     this.ParseToken(JsonConvert.DeserializeObject(json));
                 }
             }
+
+            this.Log("Logged in");
         }
 
         private async Task Refresh()
