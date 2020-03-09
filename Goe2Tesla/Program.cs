@@ -51,6 +51,8 @@ namespace Goe2Tesla
         private bool initialized = false;
         private bool working = false;
 
+        private dynamic lastMessage;
+
         private IMqttClient Client { get; set; }
         private TelegramBotClient TelegramClient { get; set; }
         private Timer PreWakeupTimer { get; set; }
@@ -91,6 +93,7 @@ namespace Goe2Tesla
                 }
 
                 dynamic json = JsonConvert.DeserializeObject(Encoding.UTF8.GetString(message.Payload));
+                this.lastMessage = json;
 
                 bool currentState = this.ParseBool(json.alw.ToString());
 
@@ -153,15 +156,21 @@ namespace Goe2Tesla
 
         private async void RunPreWakeup(object state)
         {
-            Console.WriteLine("Running pre-wakeup");
-            this.Log("Running pre-wakeup");
-
-            if(!this.Client.IsConnected)
+            if (this.lastMessage != null && this.lastMessage.car.ToString() == "3")
             {
-                this.Log("Warning: MQTT is not connected, car will not wake up!");
-            }
+                Console.WriteLine("Running pre-wakeup");
 
-            await this.HandleWakeUp();
+                if (!this.Client.IsConnected)
+                {
+                    this.Log("Warning: MQTT is not connected, car will not wake up!");
+                }
+
+                await this.HandleWakeUp();
+            }
+            else
+            {
+                Console.WriteLine("No car connected or already charged, skipping pre-wakeup");
+            }
         }
 
         private bool ParseBool(string input)
